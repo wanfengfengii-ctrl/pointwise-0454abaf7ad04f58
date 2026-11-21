@@ -5,46 +5,68 @@ from recipes.revisions import Revision
 from recipes.topology import StepEdge
 
 
-def _resume_step(
-    step: str, outgoing: dict[str, list[StepEdge]], accepting: frozenset[str]
-) -> str:
-    visited = set()
-    while step not in visited:
-        visited.add(step)
-        edges = outgoing[step]
-        if step in accepting or any(edge.code is not None for edge in edges):
-            return step
-        handoff = next((edge.target for edge in edges if edge.code is None), None)
-        if handoff is None:
-            return step
-        step = handoff
-    return step
+def _hidden_closure(step: str, outgoing: dict[str, list[StepEdge]]) -> frozenset[str]:
+    """Every step reachable from ``step`` by zero or more hidden transitions."""
+    closure = set()
+    pending = [step]
+    while pending:
+        current = pending.pop()
+        if current in closure:
+            continue
+        closure.add(current)
+        for edge in outgoing[current]:
+            if edge.code is None and edge.target not in closure:
+                pending.append(edge.target)
+    return frozenset(closure)
 
 
 def build_public_evidence(revision: Revision) -> PublicEvidence:
+    """Determinize the non-hidden behaviour of ``revision`` exactly.
+
+    Hidden transitions are collapsed into their closure.  A public state is a
+    set of internal steps that can be reached without consuming a public
+    action, so branches through hidden steps, repeated action codes and
+    hidden cycles are all preserved.  The resulting automaton accepts exactly
+    the records that have a complete path in the revision.
+    """
     graph = revision.graph
     outgoing = graph.outgoing()
-    order = {step: position for position, step in enumerate(graph.steps)}
-    start = _resume_step(graph.start, outgoing, graph.accepting)
+    accepting = graph.accepting
+    closures = {step: _hidden_closure(step, outgoing) for step in graph.steps}
+
+    def close(subset: frozenset[str]) -> frozenset[str]:
+        result: set[str] = set()
+        for step in subset:
+            result.update(closures[step])
+        return frozenset(result)
+
+    def advance(states: frozenset[str], code: str) -> frozenset[str]:
+        targets: set[str] = set()
+        for step in states:
+            for edge in outgoing[step]:
+                if edge.code == code:
+                    targets.update(closures[edge.target])
+        return frozenset(targets)
+
+    codes = revision.catalog.codes
+    start = close(frozenset({graph.start}))
     public_id = {start: 0}
     pending = deque([start])
-    accepting = []
-    transitions = []
+    accepting_ids: list[int] = []
+    transitions: list[tuple[int, str, int]] = []
     while pending:
-        step = pending.popleft()
-        source_id = public_id[step]
-        if step in graph.accepting:
-            accepting.append(source_id)
-        choices = {
-            (edge.code, _resume_step(edge.target, outgoing, graph.accepting))
-            for edge in outgoing[step]
-            if edge.code is not None
-        }
-        for code, target in sorted(choices, key=lambda choice: (choice[0], order[choice[1]])):
+        states = pending.popleft()
+        source_id = public_id[states]
+        if states & accepting:
+            accepting_ids.append(source_id)
+        for code in codes:
+            target = advance(states, code)
+            if not target:
+                continue
             if target not in public_id:
                 public_id[target] = len(public_id)
                 pending.append(target)
             transitions.append((source_id, code, public_id[target]))
     return PublicEvidence(
-        revision.catalog.codes, len(public_id), 0, tuple(accepting), tuple(transitions)
+        codes, len(public_id), 0, tuple(accepting_ids), tuple(transitions)
     )

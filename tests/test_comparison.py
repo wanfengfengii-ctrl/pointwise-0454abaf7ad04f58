@@ -52,6 +52,25 @@ class ComparisonTests(unittest.TestCase):
             self.assertEqual((same.left_only, same.right_only), (None, None))
             self.assertEqual([p.received_id for p in same.parents], [left, left])
 
+    def test_continuable_side_does_not_mask_other_direction(self):
+        with stores() as (source, center):
+            left = freeze_graph(source, '短完结', ['复', '检'], ['s', 'f'], 's', ['f'],
+                                [edge('s', 'f', '检')])
+            right = freeze_graph(source, '先检后复', ['复', '检'], ['s', 'r', 'f'], 's', ['f'],
+                                 [edge('s', 'r', '检'), edge('r', 'f', '复')])
+            report = compare_pair(center, *offline_pair(source, center, left, right))
+            self.assertEqual((report.left_only, report.right_only), (('检',), ('检', '复')))
+
+    def test_same_code_branch_past_hidden_prefix_is_shortest(self):
+        with stores() as (source, center):
+            left = freeze_graph(source, '双检分支', ['检'], ['s', 'h', 'a', 'b', 'f'], 's', ['f'], [
+                edge('s', 'h', None), edge('h', 'a', '检'), edge('h', 'b', '检'),
+                edge('a', 'f', None), edge('b', 'f', None),
+            ])
+            right = freeze_graph(source, '无动作', [], ['s'], 's', [], [])
+            report = compare_pair(center, *offline_pair(source, center, left, right))
+            self.assertEqual((report.left_only, report.right_only), (('检',), None))
+
     def test_tied_shortest_uses_action_code_order(self):
         with stores() as (source, center):
             left = freeze_graph(source, '合格', ['补', '检'], ['s', 'f'], 's', ['f'],

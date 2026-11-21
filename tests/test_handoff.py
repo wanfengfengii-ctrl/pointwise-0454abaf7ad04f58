@@ -73,6 +73,34 @@ class HandoffTests(unittest.TestCase):
                 self.assertTrue(accepts_public(item, trace), trace)
             self.assertFalse(accepts_public(item, ('检',)))
 
+    def test_hidden_branches_disclose_every_public_choice(self):
+        with stores() as (source, center):
+            revision = register(source, '隐藏分叉', ['检', '补'],
+                                ['s', 'h1', 'h2', 'h3', 'f'], 's', ['f'], [
+                                    edge('s', 'h1', None),
+                                    edge('h1', 'h2', None), edge('h1', 'h3', None),
+                                    edge('h2', 'f', '检'), edge('h3', 'f', '补'),
+                                ])
+            fixed = freeze(source, revision)
+            item = get_received(center, receive(center, fixed.issue_id, fixed.wire)).fixed.evidence
+            self.assertTrue(accepts_public(item, ('检',)))
+            self.assertTrue(accepts_public(item, ('补',)))
+            self.assertFalse(accepts_public(item, ()))
+            self.assertFalse(accepts_public(item, ('检', '补')))
+
+    def test_hidden_self_loop_still_reaches_public_exit(self):
+        with stores() as (source, center):
+            revision = register(source, '隐藏自环', ['检', '补'],
+                                ['s', 'h', 'x', 'f'], 's', ['f'], [
+                                    edge('s', 'h', None), edge('h', 'h', None),
+                                    edge('h', 'x', None), edge('x', 'f', '检'),
+                                ])
+            fixed = freeze(source, revision)
+            item = get_received(center, receive(center, fixed.issue_id, fixed.wire)).fixed.evidence
+            self.assertTrue(accepts_public(item, ('检',)))
+            self.assertFalse(accepts_public(item, ()))
+            self.assertNotIn('s', item.codes)
+
     def test_missing_revision_does_not_issue(self):
         with stores() as (source, _):
             with self.assertRaises(LookupError):
